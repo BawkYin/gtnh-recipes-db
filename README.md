@@ -42,60 +42,72 @@ meta                 schema 版本、数据源路径、导出时间
 ## 用法
 
 ```bash
-# 默认：读 ./exportrecipe-output，写 ./gtnh-recipes.db
-cargo run --release
+# 1) 导入（740MB JSON，约 23 秒；默认子命令就是 import）
+cargo run --release -- import --input /path/to/exportrecipe-output --db gtnh-recipes.db
 
-# 指定路径
-cargo run --release -- --input /path/to/exportrecipe-output --db gtnh-recipes.db
+# 调试导入：只导某类 / 每类只导 N 条 / 跳过 GT
+cargo run --release -- import --category macerator
+cargo run --release -- import --import-limit 100 --no-gt
 
-# 调试：只导某类，或每类只导 N 条
-cargo run --release -- --category macerator
-cargo run --release -- --limit 100
+# 2) 查询（都可加 --source gt|nei 限定数据集）
+cargo run --release -- item 铁锭                    # 查物品 id（支持 #123 直接按 id）
+cargo run --release -- reverse 铁锭 --source gt     # 反向：什么能做出它（带 EU/t、时长、概率）
+cargo run --release -- forward 铁锭                 # 正向：它被哪些机器消耗
+cargo run --release -- chain 铁锭 --depth 3 --limit 60   # 生产链（--limit 为节点上限）
 
-# 只要 NEI 数据集（跳过 GT）
-cargo run --release -- --no-gt
+# 3) 导出与查看
+cargo run --release -- views                          # 列出视图
+cargo run --release -- csv v_gt_recipes --out gt_recipes.csv   # 18.6 万行约 0.2 秒
 ```
 
 导入结束会打印库内统计，并与 `index.json` / `gt/index.json` 声明的总数**对账**。
 
+## 内置视图
+
+| 视图 | 内容 |
+|---|---|
+| `v_recipes_full` | 配方 + 类别名/模组/来源，扁平化 |
+| `v_item_slots_full` | 物品格全展开（一行 = 一个候选物品，含 direction/chance/amount/通配标记） |
+| `v_fluid_slots_full` | 流体格（GT 数据：毫桶数量 + 概率） |
+| `v_category_stats` | 每个类别的 NEI / GT 各自条数 |
+| `v_gt_recipes` | GT 机器配方（EU/t、时长、电压、伪配方标记） |
+
 ## 示例查询
 
 ```sql
--- 物品 id 速查（支持显示名模糊匹配）
-SELECT id, unlocalized_name, meta, display_name FROM items WHERE display_name LIKE '%铁锭%';
-
--- 什么东西能做出它（反向：以某物品为输出的配方）
-SELECT r.id, c.id AS category, r.duration, r.eut
-FROM items i
-JOIN group_candidates gc ON gc.item_id = i.id
-JOIN item_slots s       ON s.group_id = gc.group_id AND s.direction = 'result'
-JOIN recipes r          ON r.id = s.recipe_id
-JOIN categories c       ON c.id = r.category_id
-WHERE i.unlocalized_name = 'gt.metaitem.01.11001';
-
--- 它可以用在哪些配方里（正向：作为输入）
-SELECT DISTINCT c.id AS category, COUNT(*) AS uses
-FROM group_candidates gc
-JOIN item_slots s ON s.group_id = gc.group_id AND s.direction = 'input'
-JOIN recipes r    ON r.id = s.recipe_id
-JOIN categories c ON c.id = r.category_id
-WHERE gc.item_id = 12345
-GROUP BY c.id ORDER BY uses DESC;
-
--- 只看必定产出的 GT 主产物（排除伪配方），且只要标准机器
+-- 反向：什么东西能做出它（只统计"必定产出"，排除概率副产物）
 SELECT c.id, r.eut, r.duration, r.tier
-FROM recipes r JOIN categories c ON c.id = r.category_id
-WHERE r.source = 'gt' AND r.fake IS NULL
-  AND r.eut IS NOT NULL AND r.tier IN ('LV','MV','HV','EV','IV')
-LIMIT 20;
+FROM v_item_slots_full v
+JOIN recipes r    ON r.id = v.recipe_id
+JOIN categories c ON c.id = r.category_id
+WHERE v.item_id = 7136 AND v.direction = 'result' AND v.source = 'gt'
+  AND (v.chance IS NULL OR v.chance = 10000)
+ORDER BY r.eut;
+
+-- 正向：哪些机器会消耗它
+SELECT category_id, COUNT(DISTINCT recipe_id) AS uses
+FROM v_item_slots_full
+WHERE item_id = 7136 AND direction = 'input'
+GROUP BY category_id ORDER BY uses DESC;
+
+-- 用 GT 数值数据算"一条配方总耗电"（EU/t × 时长）
+SELECT category_id, eut, duration, eut * duration AS total_eu
+FROM v_gt_recipes
+WHERE eut IS NOT NULL AND duration IS NOT NULL
+ORDER BY total_eu DESC LIMIT 10;
 ```
+
+> 生产链查询为什么不用递归 CTE：真实库有 268 万条候选边，且一格可能有 251 个候选，
+> 纯 SQL 递归会指数爆炸（实测 60 秒跑不完）。`chain` 子命令改用**有界 BFS**
+> （每物品最多 4 个产出配方、每组只取一个代表并标注"任意 N 选 1"、总节点上限），
+> 实测 **0.04 秒**。
 
 ## 状态与路线图
 
 - [x] **M1**：项目骨架 + schema + NEI 数据集全量导入 + 总数对账
 - [x] **M2**：GT 数值数据集导入（duration/eut/tier/流体/概率）
-- [ ] **M3**：视图与常用查询（正向/反向/生产链递归 CTE）+ 导出 CSV 子集
-- [ ] **M4**：NEI 与 GT 的映射视图（同一台机器的两套数据对照）
+- [x] **M3**：视图 + 查询子命令（正/反/生产链）+ CSV 子集导出 + 单元测试（CI 自动跑）
+- [ ] **M4**：NEI ↔ GT 映射视图（同一台机器两套数据对照）
 
 ## 许可与数据说明
 

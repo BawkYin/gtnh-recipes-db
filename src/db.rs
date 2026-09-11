@@ -19,11 +19,13 @@ pub struct Db {
 }
 
 impl Db {
-    /// 打开（或创建）数据库并应用 schema。
+    /// 打开（或创建）数据库并应用 schema 与视图。
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path).with_context(|| format!("打开数据库失败：{path}"))?;
         conn.execute_batch(include_str!("../schema.sql"))
             .context("应用 schema.sql 失败")?;
+        conn.execute_batch(include_str!("../views.sql"))
+            .context("应用 views.sql 失败")?;
         // 导入期间放宽同步、把临时表放内存：显著加速（数据是派生物，坏了可重建）
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;

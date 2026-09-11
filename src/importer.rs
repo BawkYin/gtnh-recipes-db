@@ -53,6 +53,19 @@ pub fn import_nei(
 
     db.set_meta("nei_schema", &index.schema.to_string())?;
     db.set_meta("nei_source_path", &input.display().to_string())?;
+    db.set_meta("nei_category_count", &index.category_count.to_string())?;
+    db.set_meta(
+        "nei_duplicates_removed",
+        &index.duplicates_removed.to_string(),
+    )?;
+    db.set_meta(
+        "nei_recipes_without_result",
+        &index.recipes_without_result.to_string(),
+    )?;
+    db.set_meta(
+        "nei_categories_skipped_empty",
+        &index.categories_skipped_empty.to_string(),
+    )?;
     if let Some(generated_at) = index.generated_at.as_deref() {
         db.set_meta("nei_generated_at", generated_at)?;
     }
@@ -84,6 +97,16 @@ pub fn import_nei(
 
         let category_file: CategoryFile = read_json(&path)?;
         let total = category_file.recipes.len();
+
+        // 一致性校验：配方文件里记录的 handler 应与 index.json 的类别 id 相同
+        if let Some(handler) = category_file.handler.as_deref() {
+            if handler != category.id {
+                println!(
+                    "  注意：{} 内的 handler（{}）与 index 的 id（{}）不一致",
+                    file, handler, category.id
+                );
+            }
+        }
 
         // 类别元信息以 index.json 为准；缺失时用配方文件自身的字段兜底
         let effective = Category {
