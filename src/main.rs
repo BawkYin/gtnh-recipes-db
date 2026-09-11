@@ -91,6 +91,9 @@ fn main() -> Result<()> {
     println!("NEI：{} 个类别 / {} 条配方", nei.categories, nei.recipes);
     println!("GT ：{} 个配方图 / {} 条配方", gt.categories, gt.recipes);
 
+    // 类别是 NEI 与 GT 的并集（同名 id 合并），重算每类的配方行数
+    db.recompute_category_counts()?;
+
     println!("\n===== 库内统计 =====");
     for table in [
         "categories",
@@ -133,14 +136,14 @@ fn main() -> Result<()> {
     // ---- 给个直观的"大头"概览 ----
     println!("\n===== 配方最多的类别（前 10）=====");
     let mut stmt = db.conn.prepare(
-        "SELECT id, recipe_count, source FROM categories ORDER BY recipe_count DESC LIMIT 10",
+        "SELECT id, recipe_count, sources FROM categories ORDER BY recipe_count DESC LIMIT 10",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
     })?;
     for row in rows {
-        let (id, count, source) = row?;
-        println!("  [{source:>3}] {count:>7}  {id}");
+        let (id, count, sources) = row?;
+        println!("  [{sources:>7}] {count:>7}  {id}");
     }
 
     println!("\n数据库已就绪：{}", args.db);

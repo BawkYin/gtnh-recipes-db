@@ -44,6 +44,9 @@ impl Db {
     }
 
     /// 插入/更新一个类别。
+    ///
+    /// 同一个 id 可能同时来自 NEI 与 GT（同一台机器的两套数据），所以冲突时**合并**：
+    /// 名称/模组/amperage 谁有就保留谁，`sources` 追加来源（如 'nei,gt'）。
     pub fn upsert_category(
         &self,
         cat: &Category,
@@ -52,17 +55,19 @@ impl Db {
         actual_recipe_count: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO categories(id, name, mod_id, mod_name, recipe_count, file, collected_by, source, amperage)
+            "INSERT INTO categories(id, name, mod_id, mod_name, recipe_count, file, collected_by, sources, amperage)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
-                 name = excluded.name,
-                 mod_id = excluded.mod_id,
-                 mod_name = excluded.mod_name,
-                 recipe_count = excluded.recipe_count,
-                 file = excluded.file,
-                 collected_by = excluded.collected_by,
-                 source = excluded.source,
-                 amperage = excluded.amperage",
+                 name = COALESCE(categories.name, excluded.name),
+                 mod_id = COALESCE(categories.mod_id, excluded.mod_id),
+                 mod_name = COALESCE(categories.mod_name, excluded.mod_name),
+                 file = COALESCE(categories.file, excluded.file),
+                 collected_by = COALESCE(categories.collected_by, excluded.collected_by),
+                 amperage = COALESCE(categories.amperage, excluded.amperage),
+                 sources = CASE
+                     WHEN instr(categories.sources, excluded.sources) > 0 THEN categories.sources
+                     ELSE categories.sources || ',' || excluded.sources
+                 END",
             params![
                 cat.id,
                 cat.name,
@@ -74,6 +79,15 @@ impl Db {
                 source,
                 amperage
             ],
+        )?;
+        Ok(())
+    }
+
+    /// 重算每个类别的配方行数（跨来源合计）。导入结束后调用一次即可。
+    pub fn recompute_category_counts(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "UPDATE categories
+             SET recipe_count = (SELECT COUNT(*) FROM recipes r WHERE r.category_id = categories.id)",
         )?;
         Ok(())
     }

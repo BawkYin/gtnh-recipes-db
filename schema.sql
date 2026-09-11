@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- 配方类别（= NEI 的一个配方面板 / GT 的一个配方图）
+--
+-- 注意：NEI 与 GT 会用同一个 id 表示同一台机器（如 gt.recipe.macerator），
+-- 因此这里以 id 为唯一键，用 sources 记录"哪些来源提供过这个类别"（如 'nei,gt'），
+-- 元信息互补保留（name 来自 NEI、amperage 来自 GT）。
+-- recipe_count 由导入结束后统一重算 = 该类别在库中的配方行数（跨来源合计）。
 CREATE TABLE IF NOT EXISTS categories (
     id           TEXT PRIMARY KEY,          -- 如 gt.recipe.macerator / codechicken.nei.recipe.ShapedRecipeHandler
     name         TEXT,
@@ -28,7 +33,7 @@ CREATE TABLE IF NOT EXISTS categories (
     recipe_count INTEGER NOT NULL DEFAULT 0,
     file         TEXT,                      -- 相对 index.json 的配方文件路径
     collected_by TEXT,                      -- NULL=快速路径 / 'slow'=逐物品慢路径
-    source       TEXT NOT NULL,             -- 'nei' | 'gt'
+    sources      TEXT NOT NULL,             -- 'nei' | 'gt' | 'nei,gt'
     amperage     INTEGER                    -- 仅 GT 配方图有意义
 );
 
