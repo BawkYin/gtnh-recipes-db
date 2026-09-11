@@ -78,6 +78,20 @@ pub fn import_nei(db: &mut Db, input: &Path, filter: Option<&str>, limit: Option
         let category_file: CategoryFile = read_json(&path)?;
         let total = category_file.recipes.len();
 
+        // 类别元信息以 index.json 为准；缺失时用配方文件自身的字段兜底
+        let effective = Category {
+            id: category.id.clone(),
+            name: category.name.clone().or_else(|| category_file.name.clone()),
+            mod_id: category.mod_id.clone().or_else(|| category_file.mod_id.clone()),
+            mod_name: category.mod_name.clone().or_else(|| category_file.mod_name.clone()),
+            recipe_count: category.recipe_count,
+            file: category.file.clone(),
+            collected_by: category.collected_by.clone(),
+        };
+
+        // 先落类别行：recipes.category_id 有外键约束，必须先存在
+        db.upsert_category(&effective, "nei", None, category.recipe_count)?;
+
         // 一个类别一个事务：SQLite 事务内插入快几十倍，且失败可整类回滚
         db.conn.execute_batch("BEGIN")?;
         let mut inserted = 0usize;
@@ -109,7 +123,8 @@ pub fn import_nei(db: &mut Db, input: &Path, filter: Option<&str>, limit: Option
             }
             inserted += 1;
         }
-        db.upsert_category(category, "nei", None, inserted as i64)?;
+        // 回填实际写入的条数（用了 --limit 时会小于 index 的声明值）
+        db.upsert_category(&effective, "nei", None, inserted as i64)?;
         db.conn.execute_batch("COMMIT")?;
 
         stats.categories += 1;
@@ -135,6 +150,8 @@ pub fn import_gt(db: &mut Db, input: &Path, filter: Option<&str>) -> Result<Impo
 
     let index: GtIndexFile = read_json(&index_path)?;
     db.set_meta("gt_schema", &index.schema.to_string())?;
+    db.set_meta("gt_map_count", &index.map_count.to_string())?;
+    db.set_meta("gt_maps_skipped_empty", &index.maps_skipped_empty.to_string())?;
     if let Some(generated_at) = index.generated_at.as_deref() {
         db.set_meta("gt_generated_at", generated_at)?;
     }
@@ -167,6 +184,18 @@ pub fn import_gt(db: &mut Db, input: &Path, filter: Option<&str>) -> Result<Impo
         let category_file: GtCategoryFile = read_json(&path)?;
         let total = category_file.recipes.len();
 
+        // 先落类别行满足外键；条数先按 index 声明值，导入后回填实际值
+        let category = Category {
+            id: map.id.clone(),
+            name: None,
+            mod_id: Some("gregtech".to_string()),
+            mod_name: Some("GregTech".to_string()),
+            recipe_count: map.recipe_count,
+            file: map.file.clone(),
+            collected_by: None,
+        };
+        db.upsert_category(&category, "gt", map.amperage, map.recipe_count)?;
+
         db.conn.execute_batch("BEGIN")?;
         let mut inserted = 0usize;
         for (seq, recipe) in category_file.recipes.iter().enumerate() {
@@ -190,17 +219,6 @@ pub fn import_gt(db: &mut Db, input: &Path, filter: Option<&str>) -> Result<Impo
             insert_gt_fluid_slots(db, recipe_id, "result", &recipe.fluid_outputs)?;
             inserted += 1;
         }
-
-        // GT 的类别信息来自 gt/index.json（有 amperage，没有 mod 名）
-        let category = Category {
-            id: map.id.clone(),
-            name: None,
-            mod_id: Some("gregtech".to_string()),
-            mod_name: Some("GregTech".to_string()),
-            recipe_count: total as i64,
-            file: map.file.clone(),
-            collected_by: None,
-        };
         db.upsert_category(&category, "gt", map.amperage, inserted as i64)?;
         db.conn.execute_batch("COMMIT")?;
 
