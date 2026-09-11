@@ -367,6 +367,235 @@ fn input_groups(conn: &Connection, recipe_id: i64) -> Result<Vec<InputGroup>> {
     Ok(out)
 }
 
+// ==================== 配方详情 / 列表 ====================
+
+/// 一条配方里的一个格（输入或输出）
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailGroup {
+    pub kind: String,
+    pub ore: Option<String>,
+    pub amount: Option<i64>,
+    pub chance: Option<i64>,
+    /// 候选物品的显示名（最多保留前若干个，避免刷屏）
+    pub candidates: Vec<String>,
+    pub candidate_total: i64,
+}
+
+/// 一条配方里的流体格
+#[derive(Debug, Clone, PartialEq)]
+pub struct DetailFluid {
+    pub fluid: String,
+    pub amount: i64,
+    pub chance: Option<i64>,
+}
+
+/// 一条配方的完整详情
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecipeDetail {
+    pub recipe_id: i64,
+    pub category_id: String,
+    pub category_name: Option<String>,
+    pub sources: String,
+    pub source: String,
+    pub eut: Option<i64>,
+    pub duration: Option<i64>,
+    pub tier: Option<String>,
+    pub amperage: Option<i64>,
+    pub no_result: bool,
+    pub fake: bool,
+    pub inputs: Vec<DetailGroup>,
+    pub results: Vec<DetailGroup>,
+    pub fluid_inputs: Vec<DetailFluid>,
+    pub fluid_outputs: Vec<DetailFluid>,
+}
+
+/// 取一条配方的完整详情（输入/输出/候选/流体/数值字段）。
+pub fn recipe_detail(conn: &Connection, recipe_id: i64) -> Result<RecipeDetail> {
+    let (
+        category_id,
+        category_name,
+        sources,
+        source,
+        eut,
+        duration,
+        tier,
+        amperage,
+        no_result,
+        fake,
+    ) = conn
+        .query_row(
+            "SELECT r.category_id, c.name, c.sources, r.source, r.eut, r.duration, r.tier,
+                    r.amperage, r.no_result, r.fake
+             FROM recipes r JOIN categories c ON c.id = r.category_id
+             WHERE r.id = ?1",
+            [recipe_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, i64>(8)? != 0,
+                    row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
+                ))
+            },
+        )
+        .with_context(|| format!("找不到配方 id={recipe_id}"))?;
+
+    // 物品格：一行一个候选，按 (方向, 格序号) 分组
+    let mut stmt = conn.prepare(
+        "SELECT s.direction, s.slot_index, g.kind, g.ore, g.amount, g.chance,
+                COALESCE(i.display_name, i.unlocalized_name)
+         FROM item_slots s
+         JOIN ingredient_groups g ON g.id = s.group_id
+         LEFT JOIN group_candidates gc ON gc.group_id = g.id
+         LEFT JOIN items i ON i.id = gc.item_id
+         WHERE s.recipe_id = ?1
+         ORDER BY s.direction, s.slot_index, gc.item_id",
+    )?;
+    let rows = stmt.query_map([recipe_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,         // direction
+            row.get::<_, i64>(1)?,            // slot_index
+            row.get::<_, String>(2)?,         // kind
+            row.get::<_, Option<String>>(3)?, // ore
+            row.get::<_, Option<i64>>(4)?,    // amount
+            row.get::<_, Option<i64>>(5)?,    // chance
+            row.get::<_, Option<String>>(6)?, // candidate name
+        ))
+    })?;
+
+    let mut inputs: Vec<DetailGroup> = Vec::new();
+    let mut results: Vec<DetailGroup> = Vec::new();
+    let mut current_key: Option<(String, i64)> = None;
+    for row in rows {
+        let (direction, slot_index, kind, ore, amount, chance, candidate) = row?;
+        let key = (direction.clone(), slot_index);
+        if current_key.as_ref() != Some(&key) {
+            let group = DetailGroup {
+                kind,
+                ore,
+                amount,
+                chance,
+                candidates: Vec::new(),
+                candidate_total: 0,
+            };
+            match direction.as_str() {
+                "result" => results.push(group),
+                _ => inputs.push(group), // input / other 都算输入侧
+            }
+            current_key = Some(key);
+        }
+        let target = if direction == "result" {
+            results.last_mut()
+        } else {
+            inputs.last_mut()
+        };
+        if let Some(group) = target {
+            // 只统计真正的候选物品（LEFT JOIN 在"无候选"时会产出一行 NULL）
+            if let Some(name) = candidate {
+                group.candidate_total += 1;
+                if group.candidates.len() < 6 {
+                    group.candidates.push(name);
+                }
+            }
+        }
+    }
+
+    let fluid_rows = |direction: &str| -> Result<Vec<DetailFluid>> {
+        let mut stmt = conn.prepare(
+            "SELECT f.name, s.amount, s.chance
+             FROM fluid_slots s JOIN fluids f ON f.id = s.fluid_id
+             WHERE s.recipe_id = ?1 AND s.direction = ?2
+             ORDER BY s.slot_index",
+        )?;
+        let rows = stmt.query_map(params![recipe_id, direction], |row| {
+            Ok(DetailFluid {
+                fluid: row.get(0)?,
+                amount: row.get(1)?,
+                chance: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    };
+
+    Ok(RecipeDetail {
+        recipe_id,
+        category_id,
+        category_name,
+        sources,
+        source,
+        eut,
+        duration,
+        tier,
+        amperage,
+        no_result,
+        fake,
+        inputs,
+        results,
+        fluid_inputs: fluid_rows("input")?,
+        fluid_outputs: fluid_rows("result")?,
+    })
+}
+
+/// 配方列表里的一行摘要
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecipeSummary {
+    pub recipe_id: i64,
+    pub category_id: String,
+    pub eut: Option<i64>,
+    pub duration: Option<i64>,
+    pub tier: Option<String>,
+    /// 主产出的简短描述（第一个输出格的代表物品）
+    pub main_output: Option<String>,
+}
+
+/// 列出某台机器（类别 id 含该子串）的配方摘要。
+pub fn list_recipes(
+    conn: &Connection,
+    category_needle: &str,
+    source: &str,
+    limit: usize,
+) -> Result<Vec<RecipeSummary>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.category_id, r.eut, r.duration, r.tier,
+                (SELECT COALESCE(i.display_name, i.unlocalized_name) || ' ×' || gc.count
+                 FROM item_slots s
+                 JOIN group_candidates gc ON gc.group_id = s.group_id
+                 JOIN items i ON i.id = gc.item_id
+                 WHERE s.recipe_id = r.id AND s.direction = 'result'
+                 ORDER BY s.slot_index, gc.item_id LIMIT 1)
+         FROM recipes r
+         JOIN categories c ON c.id = r.category_id
+         WHERE r.category_id LIKE '%' || ?1 || '%' AND (?2 = 'any' OR r.source = ?2)
+         ORDER BY r.id
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![category_needle, source, limit as i64], |row| {
+        Ok(RecipeSummary {
+            recipe_id: row.get(0)?,
+            category_id: row.get(1)?,
+            eut: row.get(2)?,
+            duration: row.get(3)?,
+            tier: row.get(4)?,
+            main_output: row.get(5)?,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
 // ==================== 打印包装 ====================
 
 pub fn print_items(conn: &Connection, needle: &str, limit: usize) -> Result<()> {
@@ -467,8 +696,134 @@ pub fn print_chain(
     Ok(())
 }
 
-// ==================== CSV 子集导出 ====================
+/// 打印一条配方的完整详情（人类可读）。
+pub fn print_recipe(conn: &Connection, recipe_id: i64) -> Result<()> {
+    let detail = recipe_detail(conn, recipe_id)?;
+    let name = detail
+        .category_name
+        .as_deref()
+        .map(|n| format!(" / {n}"))
+        .unwrap_or_default();
+    println!(
+        "配方 #{}  [{}] {}{}",
+        detail.recipe_id, detail.source, detail.category_id, name
+    );
+    println!("  类别来源集合：{}", detail.sources);
 
+    let mut numbers = Vec::new();
+    if let Some(eut) = detail.eut {
+        numbers.push(format!("{eut} EU/t"));
+    }
+    if let Some(duration) = detail.duration {
+        numbers.push(format!("{duration} tick"));
+    }
+    if let Some(tier) = detail.tier.as_deref() {
+        numbers.push(tier.to_string());
+    }
+    if let Some(amperage) = detail.amperage {
+        numbers.push(format!("{amperage} A"));
+    }
+    if detail.fake {
+        numbers.push("伪配方".to_string());
+    }
+    if detail.no_result {
+        numbers.push("无产出".to_string());
+    }
+    if !numbers.is_empty() {
+        println!("  {}", numbers.join(" | "));
+    }
+
+    print_group_section("输入", &detail.inputs);
+    print_fluid_section("流体输入", &detail.fluid_inputs);
+    print_group_section("输出", &detail.results);
+    print_fluid_section("流体输出", &detail.fluid_outputs);
+    Ok(())
+}
+
+fn print_group_section(title: &str, groups: &[DetailGroup]) {
+    if groups.is_empty() {
+        return;
+    }
+    println!("  {title}：");
+    for group in groups {
+        let mut desc = if let Some(ore) = group.ore.as_deref() {
+            format!("矿辞 {ore}")
+        } else if group.candidate_total > 1 {
+            let mut list = group.candidates.join(" / ");
+            let extra = group.candidate_total - group.candidates.len() as i64;
+            if extra > 0 {
+                list.push_str(&format!(" / …（共 {} 个候选）", group.candidate_total));
+            }
+            list
+        } else {
+            group
+                .candidates
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "?".to_string())
+        };
+        if let Some(amount) = group.amount {
+            if amount != 1 {
+                desc.push_str(&format!(" ×{amount}"));
+            }
+        }
+        if let Some(chance) = group.chance {
+            if chance != 10000 {
+                desc.push_str(&format!("（{:.2}% 概率）", chance as f64 / 100.0));
+            }
+        }
+        println!("    - {desc}");
+    }
+}
+
+fn print_fluid_section(title: &str, fluids: &[DetailFluid]) {
+    if fluids.is_empty() {
+        return;
+    }
+    println!("  {title}：");
+    for fluid in fluids {
+        let mut desc = format!("{} {} mB", fluid.fluid, fluid.amount);
+        if let Some(chance) = fluid.chance {
+            if chance != 10000 {
+                desc.push_str(&format!("（{:.2}% 概率）", chance as f64 / 100.0));
+            }
+        }
+        println!("    - {desc}");
+    }
+}
+
+/// 列出某台机器（类别 id 含子串）的配方摘要。
+pub fn print_recipes(conn: &Connection, needle: &str, source: &str, limit: usize) -> Result<()> {
+    let rows = list_recipes(conn, needle, source, limit)?;
+    println!(
+        "类别含 \"{needle}\" 的配方（{}/{}，来源={source}）：",
+        rows.len(),
+        limit
+    );
+    if rows.is_empty() {
+        println!("  （无）");
+    }
+    for row in rows {
+        let mut parts = vec![format!("#{}", row.recipe_id)];
+        if let Some(output) = row.main_output.as_deref() {
+            parts.push(output.to_string());
+        }
+        if let Some(eut) = row.eut {
+            parts.push(format!("{eut} EU/t"));
+        }
+        if let Some(duration) = row.duration {
+            parts.push(format!("{duration}t"));
+        }
+        if let Some(tier) = row.tier.as_deref() {
+            parts.push(tier.to_string());
+        }
+        parts.push(format!("[{}]", row.category_id));
+        println!("  {}", parts.join("  |  "));
+    }
+    Ok(())
+}
+
+// ==================== CSV 子集导出 ====================
 /// 把某个视图/表导出为 CSV（stdout 或文件）。
 pub fn export_csv(conn: &Connection, view: &str, out: Option<&str>) -> Result<()> {
     // 只允许字母数字下划线，杜绝 SQL 注入（表名无法参数化）
@@ -609,5 +964,28 @@ mod tests {
             rows.iter().any(|node| node.note.is_some()),
             "多候选格应给出备注：{rows:?}"
         );
+    }
+
+    #[test]
+    fn recipe_detail_groups() {
+        let conn = fixture();
+        let detail = recipe_detail(&conn, 1).unwrap();
+        assert_eq!(detail.category_id, "gt.recipe.macerator");
+        assert_eq!(detail.eut, Some(2));
+        assert_eq!(detail.duration, Some(200));
+        assert_eq!(detail.inputs.len(), 1, "输入只有一个候选组");
+        assert_eq!(detail.inputs[0].candidate_total, 2, "该组有 2 个候选物品");
+        assert_eq!(detail.results.len(), 1);
+        assert_eq!(detail.results[0].candidates, vec!["铁粉".to_string()]);
+    }
+
+    #[test]
+    fn list_recipes_summary() {
+        let conn = fixture();
+        let rows = list_recipes(&conn, "macerator", "gt", 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].recipe_id, 1);
+        assert_eq!(rows[0].eut, Some(2));
+        assert_eq!(rows[0].main_output.as_deref(), Some("铁粉 ×1"));
     }
 }

@@ -35,6 +35,8 @@ gtnh-recipes-db —— ExportRecipe 的 JSON 导出 → SQLite 数据库，并�
   reverse <名称|#id>          反向：什么东西能做出它（GT 数据带 EU/t、时长、概率）
   forward <名称|#id>          正向：它被哪些机器/类别消耗
   chain <名称|#id>            生产链：递归展开\"需要什么才能做出来\"
+  recipe <配方id>             看一条配方的完整详情（输入/输出/候选/流体/数值）
+  recipes <类别子串>          列出某台机器的配方摘要（如 recipes macerator）
   csv <视图名>                把视图/表导出成 CSV（默认写 stdout，--out 写文件）
   views                       列出数据库里的视图
 
@@ -144,6 +146,20 @@ fn main() -> Result<()> {
             let db = Db::open(&opts.db)?;
             let item = q::resolve_item(&db.conn, &needle)?;
             q::print_chain(&db.conn, &item, &opts.source, opts.depth, opts.limit)
+        }
+        "recipe" => {
+            let id_text = need(argument, "recipe <配方id>")?;
+            let recipe_id: i64 = id_text
+                .trim_start_matches('#')
+                .parse()
+                .map_err(|_| anyhow::anyhow!("配方 id 必须是数字：{id_text}"))?;
+            let db = Db::open(&opts.db)?;
+            q::print_recipe(&db.conn, recipe_id)
+        }
+        "recipes" => {
+            let needle = need(argument, "recipes <类别子串>")?;
+            let db = Db::open(&opts.db)?;
+            q::print_recipes(&db.conn, &needle, &opts.source, opts.limit)
         }
         "csv" => {
             let view = need(argument, "csv <视图名>")?;

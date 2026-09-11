@@ -3,6 +3,9 @@
 把 [ExportRecipe](https://github.com/BawkYin/ExportRecipe)（GTNH 配方导出器）产出的 JSON
 数据，规范化导入 **SQLite**，提供可直接查询的配方数据库。
 
+> 📖 **不想看代码？直接看 [使用教程 TUTORIAL.md](TUTORIAL.md)** ——
+> 命令速查表、5 个真实场景示例、常见问题、字段含义，照着敲就能用。
+
 > 定位：**数据消费层**。JSON 导出文件是"唯一真相"，本工具是**可随时重建的派生物**；
 > 不改动导出器与导出格式。
 
