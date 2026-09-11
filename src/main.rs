@@ -73,21 +73,31 @@ fn parse_args() -> Result<Option<Args>> {
 }
 
 fn main() -> Result<()> {
-    let Some(args) = parse_args()? else { return Ok(()) };
+    let Some(args) = parse_args()? else {
+        return Ok(());
+    };
 
     println!("数据目录：{}", args.input);
     println!("数据库　：{}", args.db);
     let started = Instant::now();
 
     let mut db = Db::open(&args.db)?;
-    let nei = import_nei(&mut db, Path::new(&args.input), args.category.as_deref(), args.limit)?;
+    let nei = import_nei(
+        &mut db,
+        Path::new(&args.input),
+        args.category.as_deref(),
+        args.limit,
+    )?;
     let gt = if args.skip_gt {
         Default::default()
     } else {
         import_gt(&mut db, Path::new(&args.input), args.category.as_deref())?
     };
 
-    println!("\n===== 导入完成（{:.1} 秒）=====", started.elapsed().as_secs_f64());
+    println!(
+        "\n===== 导入完成（{:.1} 秒）=====",
+        started.elapsed().as_secs_f64()
+    );
     println!("NEI：{} 个类别 / {} 条配方", nei.categories, nei.recipes);
     println!("GT ：{} 个配方图 / {} 条配方", gt.categories, gt.recipes);
 
@@ -118,7 +128,11 @@ fn main() -> Result<()> {
             "  NEI 配方：期望 {} / 实际 {} {}",
             nei_expected,
             nei_actual,
-            if nei_expected == nei_actual { "✔" } else { "✘ 不一致！" }
+            if nei_expected == nei_actual {
+                "✔"
+            } else {
+                "✘ 不一致！"
+            }
         );
         if gt.expected > 0 {
             let gt_actual = db.count_recipes_by_source("gt")?;
@@ -126,7 +140,11 @@ fn main() -> Result<()> {
                 "  GT  配方：期望 {} / 实际 {} {}",
                 gt.expected,
                 gt_actual,
-                if gt.expected == gt_actual { "✔" } else { "✘ 不一致！" }
+                if gt.expected == gt_actual {
+                    "✔"
+                } else {
+                    "✘ 不一致！"
+                }
             );
         }
     } else {
@@ -139,7 +157,11 @@ fn main() -> Result<()> {
         "SELECT id, recipe_count, sources FROM categories ORDER BY recipe_count DESC LIMIT 10",
     )?;
     let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     })?;
     for row in rows {
         let (id, count, sources) = row?;

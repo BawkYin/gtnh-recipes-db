@@ -12,7 +12,9 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 
 use crate::db::Db;
-use crate::model::{Category, CategoryFile, GtCategoryFile, GtIndexFile, GtItem, Ingredient, Item, IndexFile};
+use crate::model::{
+    Category, CategoryFile, GtCategoryFile, GtIndexFile, GtItem, IndexFile, Ingredient, Item,
+};
 
 #[derive(Debug, Default)]
 pub struct ImportStats {
@@ -40,7 +42,12 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// 导入 NEI 通用数据集。
-pub fn import_nei(db: &mut Db, input: &Path, filter: Option<&str>, limit: Option<usize>) -> Result<ImportStats> {
+pub fn import_nei(
+    db: &mut Db,
+    input: &Path,
+    filter: Option<&str>,
+    limit: Option<usize>,
+) -> Result<ImportStats> {
     let index_path = input.join("index.json");
     let index: IndexFile = read_json(&index_path)?;
 
@@ -82,8 +89,14 @@ pub fn import_nei(db: &mut Db, input: &Path, filter: Option<&str>, limit: Option
         let effective = Category {
             id: category.id.clone(),
             name: category.name.clone().or_else(|| category_file.name.clone()),
-            mod_id: category.mod_id.clone().or_else(|| category_file.mod_id.clone()),
-            mod_name: category.mod_name.clone().or_else(|| category_file.mod_name.clone()),
+            mod_id: category
+                .mod_id
+                .clone()
+                .or_else(|| category_file.mod_id.clone()),
+            mod_name: category
+                .mod_name
+                .clone()
+                .or_else(|| category_file.mod_name.clone()),
             recipe_count: category.recipe_count,
             file: category.file.clone(),
             collected_by: category.collected_by.clone(),
@@ -151,7 +164,10 @@ pub fn import_gt(db: &mut Db, input: &Path, filter: Option<&str>) -> Result<Impo
     let index: GtIndexFile = read_json(&index_path)?;
     db.set_meta("gt_schema", &index.schema.to_string())?;
     db.set_meta("gt_map_count", &index.map_count.to_string())?;
-    db.set_meta("gt_maps_skipped_empty", &index.maps_skipped_empty.to_string())?;
+    db.set_meta(
+        "gt_maps_skipped_empty",
+        &index.maps_skipped_empty.to_string(),
+    )?;
     if let Some(generated_at) = index.generated_at.as_deref() {
         db.set_meta("gt_generated_at", generated_at)?;
     }
@@ -224,16 +240,28 @@ pub fn import_gt(db: &mut Db, input: &Path, filter: Option<&str>) -> Result<Impo
 
         stats.categories += 1;
         stats.recipes += inserted;
-        println!("  [GT ] {:<58} {:>7}/{} 条", truncate(&map.id, 58), inserted, total);
+        println!(
+            "  [GT ] {:<58} {:>7}/{} 条",
+            truncate(&map.id, 58),
+            inserted,
+            total
+        );
     }
     Ok(stats)
 }
 
 /// GT 物品格：每个物品自带概率 → 一格 = 一个单候选组。
-fn insert_gt_item_slots(db: &mut Db, recipe_id: i64, direction: &str, cells: &[Option<GtItem>]) -> Result<()> {
+fn insert_gt_item_slots(
+    db: &mut Db,
+    recipe_id: i64,
+    direction: &str,
+    cells: &[Option<GtItem>],
+) -> Result<()> {
     for (slot_index, cell) in cells.iter().enumerate() {
         let Some(gt_item) = cell else { continue };
-        let Some(item) = gt_item.item.as_ref() else { continue };
+        let Some(item) = gt_item.item.as_ref() else {
+            continue;
+        };
         let ingredient = Ingredient {
             kind: "item".to_string(),
             item: Some(Item { ..item.clone() }),
@@ -261,7 +289,9 @@ fn insert_gt_fluid_slots(
 ) -> Result<()> {
     for (slot_index, cell) in cells.iter().enumerate() {
         let Some(fluid) = cell else { continue };
-        let Some(name) = fluid.fluid.as_deref() else { continue };
+        let Some(name) = fluid.fluid.as_deref() else {
+            continue;
+        };
         db.insert_fluid_slot(
             recipe_id,
             direction,

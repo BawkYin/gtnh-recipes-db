@@ -97,8 +97,19 @@ LIMIT 20;
 - [ ] **M3**：视图与常用查询（正向/反向/生产链递归 CTE）+ 导出 CSV 子集
 - [ ] **M4**：NEI 与 GT 的映射视图（同一台机器的两套数据对照）
 
+## 许可与数据说明
+
+- **代码许可**：MIT，见 [LICENSE](LICENSE)。
+- **本仓库只包含工具，不包含数据**：导出的 JSON（约 740MB）与生成的
+  `gtnh-recipes.db`（约 436MB）都在 `.gitignore` 中，请自行用
+  [ExportRecipe](https://github.com/BawkYin/ExportRecipe) 生成：
+  `/exportrecipes nei` → `/exportrecipes slow` → `/exportrecipes gt`。
+- **关于再分发数据**：导出的数据来自 GTNH 整合包内各 mod 的运行时注册表。
+  如果你想**公开分发数据**（例如作为 Release 附件），请先确认相关 mod 的许可证与署名要求；
+  代码可以自由公开，数据的分发是另一件事。
+
 ## 说明
 
-- 数据库文件（`gtnh-recipes.db*`）**不进 git**，随时可用 `cargo run --release` 重建；
-- 数据源不随本仓库分发（体积约 740MB），请用导出器生成：
-  `/exportrecipes nei` → `/exportrecipes slow` → `/exportrecipes gt`。
+- 数据库是**派生物**：任何 schema 变更后直接删掉 `.db` 重新导入即可（全量 23 秒）；
+- 导入结束会与 `index.json` / `gt/index.json` 声明的配方总数**对账**，
+  不一致会明确打印 `✘`，避免静默丢数据。

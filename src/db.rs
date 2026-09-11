@@ -31,7 +31,11 @@ impl Db {
              PRAGMA temp_store=MEMORY;
              PRAGMA cache_size=-200000;",
         )?;
-        Ok(Self { conn, item_cache: HashMap::new(), fluid_cache: HashMap::new() })
+        Ok(Self {
+            conn,
+            item_cache: HashMap::new(),
+            fluid_cache: HashMap::new(),
+        })
     }
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
@@ -130,9 +134,11 @@ impl Db {
             "INSERT OR IGNORE INTO fluids(name, display_name) VALUES(?1, ?2)",
             params![name, display_name],
         )?;
-        let id: i64 = self
-            .conn
-            .query_row("SELECT id FROM fluids WHERE name = ?1", params![name], |row| row.get(0))?;
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM fluids WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
         self.fluid_cache.insert(name.to_string(), id);
         Ok(id)
     }
